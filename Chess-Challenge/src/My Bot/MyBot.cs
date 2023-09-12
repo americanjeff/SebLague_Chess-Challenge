@@ -3,9 +3,9 @@ using System;
 using System.Linq;
 
 // <summary>
-// Chess bot "The Thunker Weed" for SebLague Chess Challenge (https://github.com/SebLague/Chess-Challenge/tree/main/Chess-Challenge).
+// Chess bot "Thunker Weed" for SebLague Chess Challenge (https://github.com/SebLague/Chess-Challenge/tree/main/Chess-Challenge).
 // Author: American Jeff
-// 2023-09-10
+// 2023-09-11
 // </summary>
 public class MyBot : IChessBot
 {
