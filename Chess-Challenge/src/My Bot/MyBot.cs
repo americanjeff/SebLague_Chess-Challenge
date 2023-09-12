@@ -229,13 +229,13 @@ public class MyBot : IChessBot
                     egScore += ppt[index] * colorSign;
                 }
 
-        return (phaseWeight * mgScore + 24 * egScore - egScore * phaseWeight) / (board.IsWhiteToMove ? 24 : -24) + phaseWeight / 2;
+        return (phaseWeight * mgScore + 24 * egScore - egScore * phaseWeight) / (board.IsWhiteToMove ? 24 : -24) + 16;
     }
 
     // Read in range-compressed piece position tables and add piece values
     // (https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function)
     static int bi;
-    readonly int[] ppt = new[] {
+    readonly static int[] ppt = new[] {
             64011389261109431815273119744m,
             71819935927675683611806531584m,
             75527711785727240428128370688m,
