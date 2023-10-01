@@ -2,21 +2,18 @@
 using System;
 using System.Linq;
 
-// <summary>
-// Chess bot "Thunker Weed" for SebLague Chess Challenge (https://github.com/SebLague/Chess-Challenge/tree/main/Chess-Challenge).
+//
+// Chess bot "Thunker Weed" for SebLague Chess Challenge
+//
 // Author: American Jeff
-// 2023-09-11
-// </summary>
+// 2023-09-30
+//
+// Thanks to https://github.com/Tyrant7/Chess-Challenge from which many
+// token savings were gleaned.
+//
 public class MyBot : IChessBot
 {
-    struct Entry
-    {
-        public ulong zobrist;
-        public int score, depth;
-        public ushort move, cutoff;
-    }
-    readonly Entry[] tt = new Entry[0x800000];
-
+    readonly (ulong, Move, int, int, int)[] tt = new (ulong, Move, int, int, int)[0x700000];
     int timeLimit;
 #if DEBUG
     int nodes;
@@ -31,25 +28,27 @@ public class MyBot : IChessBot
     {
         board = botBoard;
         timer = moveTimer;
-        // Carve off 2/3 of the starting time allocation and determine time
-        // limit from that.  Leads to more even pacing.
-        timeLimit = Math.Min(timer.GameStartTimeMilliseconds * 2 / 3, timer.MillisecondsRemaining) / 14;
         history = new int[2, 64, 7];
 #if DEBUG
         nodes = 0;
 #endif
-        int depthLimit = 2, alpha = -66666, beta = 66666, score = 0;
-        while (depthLimit < 66 && score != 55555 /* TIMEOUT */)
+        int depthLimit = 2, alpha = -66666, beta = 66666, score;
+
+        //
+        // Time allocation.
+        //
+        timeLimit = Math.Min(timer.GameStartTimeMilliseconds * 2 / 3, timer.MillisecondsRemaining) / 14;
+
+        while (depthLimit < 66 && timer.MillisecondsElapsedThisTurn <= 0.34f * timeLimit)
         {
-            score =
-                NegaScout(alpha, beta, 0, depthLimit, true);
+            score = Search(alpha, beta, 0, depthLimit, true);
 #if DEBUG
             if (depthLimit == 2) Console.WriteLine();
             string moveString = bestMove.ToString();
             string moveNumStr = String.Format("{0:N1}", board.PlyCount / 2f + 1);
             if (depthLimit == 2)
                 Console.WriteLine("{0,4} {1,5} {2,7} {3,4}/{4,4} {5,6} {6,6}/s {7,7} {8,8}",
-                    "#", "depth", "score", "used", "rem", "nodes", "nodes", "best", "The Thunker Weed");
+                    "#", "depth", "score", "used", "rem", "nodes", "nodes", "best", "MyBot");
             Console.WriteLine(
                 "{0,4} {1,5} {2,7} {3,4}/{4,4} {5,6} {6,6}/s {7,7}",
                 moveNumStr,
@@ -61,6 +60,10 @@ public class MyBot : IChessBot
                 1000 * nodes / (timer.MillisecondsElapsedThisTurn + 1),
                 moveString);
 #endif
+
+            //
+            // Aspiration window update.
+            //
             if (alpha < score && score < beta)
             {
                 alpha = score - 10;
@@ -72,86 +75,100 @@ public class MyBot : IChessBot
                 beta = 66666;
                 alpha = -66666;
             }
-            // Early timeout.  0.34 factor determined by black box testing
-            // with timeLimit = time/14.  Other winning combos were
-            // 0.33 with time/13 and 0.35 with time/15.
-            if (timer.MillisecondsElapsedThisTurn > 0.34f * timeLimit)
-                break;
         }
         return bestMove;
     }
 
-    int NegaScout(int alpha, int beta, int depth, int depthRemaining, bool nullMoveOk)
+    int Search(int alpha, int beta, int depth, int depthRemaining, bool nullMoveOk)
     {
-    #if DEBUG
+#if DEBUG
         nodes++;
-    #endif
-        ulong zobrist = board.ZobristKey, zindex = zobrist & 0x7FFFFF;
-        var entry = tt[zindex];
-        bool topLevel = depth == 0, isInCheck = board.IsInCheck();
+#endif
+        ulong zobrist = board.ZobristKey;
+        var (entryZobrist, entryMove, score, entryDepth, entryCutoff) = tt[zobrist & 0x6fffff];
+        bool interior = depth > 0, isInCheck = board.IsInCheck();
         if (isInCheck)
             depthRemaining++;
-        int score,
-            bestScore = -666_666,
-            moveNum = 0,
-            entryScore = entry.score,
-            entryCutoff = entry.cutoff;
+        int bestScore = -666_666, moveNum = 0;
+        bool quiescence = depthRemaining <= 0, inNullWindow = beta == alpha + 1;
         int Recurse(int bayta, int depthDecrement = 1, bool isNullMoveOk = true)
-            => score = -NegaScout(-bayta, -alpha, depth + 1, depthRemaining - depthDecrement, isNullMoveOk);
+            => score = -Search(-bayta, -alpha, depth + 1, depthRemaining - depthDecrement, isNullMoveOk);
 
-        if (!topLevel && board.IsRepeatedPosition())
+        if (interior && board.IsRepeatedPosition())
             return 0;
 
-        // Check transposition table
-        if (!topLevel && entry.zobrist == zobrist && entry.depth >= depthRemaining &&
-            Math.Abs(entryScore) < 30_000 &&
+        if (interior && entryZobrist == zobrist && entryDepth >= depthRemaining &&
+            Math.Abs(score) < 30_000 &&
             (
                 entryCutoff == 2 /* EXACT */ ||
-                entryCutoff == 0 /* BETA */ && entryScore >= beta ||
-                entryCutoff == 1 /* ALPHA */ && entryScore <= alpha
+                entryCutoff == 0 /* BETA */ && score >= beta ||
+                entryCutoff == 1 /* ALPHA */ && score <= alpha
             ))
-            return entryScore;
+            return score;
 
-        bool quiescence = depthRemaining <= 0;
         if (quiescence)
         {
-            bestScore = StaticEvaluation();
-            if (bestScore > alpha)
-                alpha = bestScore;
-            if (alpha >= beta)
+            //
+            // Static evaluation.
+            //
+            int egScore = 0,
+                mgScore = 0,
+                phaseWeight = 0,
+                side = 2;
+            for (;--side >= 0; mgScore = -mgScore, egScore = -egScore)
+                for (int p = 6; --p >= 0;)
+                    for (ulong mask = board.GetPieceBitboard((PieceType)p + 1, side > 0); mask != 0;)
+                    {
+                        phaseWeight += 0x42110 >> p * 4 & 0xf;
+                        int square = BitboardHelper.ClearAndGetIndexOfLSB(ref mask),
+                            index = (square ^ 0b111000 * side) * 12 + p * 2,
+
+                            // Mobility for sliders plus support/attacks for king, pawn and knight
+                            terps = BitboardHelper.GetNumberOfSetBits(
+                                (p % 5 > 1 ? 0xffffffffffffffff : board.AllPiecesBitboard) &
+                                BitboardHelper.GetPieceAttacks((PieceType)p + 1, new Square(square), board, side > 0)
+                            );
+
+                        //mgScore += terps * (0x112211 >> p * 4 & 0xf) + ppt[index++];
+                        mgScore += ppt[index++] + terps;
+                        egScore += ppt[index]   + terps * 7;
+                    }
+            bestScore =
+                (phaseWeight * mgScore + 24 * egScore - egScore * phaseWeight) /
+                (board.IsWhiteToMove ? 24 : -24) + 16;
+
+            if (bestScore > alpha && (alpha = bestScore) >= beta)
                 return alpha;
         }
-        else if (!isInCheck && beta == alpha + 1)
+        else if (!isInCheck && inNullWindow)
         {
-            if (depth > 2)
-                // Extrapolate the quiescent search score of current node
-                // proportional to depthRemaining and some magic constants.
-                // If the extrapolations are outside alpha/beta then we prune.
-                // Magic constants determined via black box tuning.
-            {
-                score = NegaScout(alpha, beta, depth, 0, true);
-                if (score - 68 * depthRemaining >= beta || score + 87 * depthRemaining <= alpha)
-                    return score;
-            }
-                //if ((score = NegaScout(alpha, beta, depth, 0, true)) - 68 * depthRemaining >= beta ||
-                //    score + 87 * depthRemaining <= alpha)
-                //    return score;
-            if (nullMoveOk && depthRemaining > 1)
+            //
+            // Razor on quiesence score.
+            //
+            score = Search(alpha, beta, depth, 0, true);
+            if (depth > 3 && (score - 68 * depthRemaining >= beta || score + 87 * depthRemaining <= alpha))
+                return score;
+
+            //
+            // Null move reduction.
+            //
+            if (nullMoveOk && score >= beta)
             {
                 board.ForceSkipTurn();
-                Recurse(beta, 3 + depthRemaining / 4 /* null move reduction value from Tyrant */, false);
+                Recurse(beta, 4, false);
                 board.UndoSkipTurn();
 
                 if (score >= beta)
                     return score;
             }
         }
-        entry.cutoff = 1; // ALPHA
+
+        entryCutoff = 1; // ALPHA
         Span<Move> moves = stackalloc Move[218];
         board.GetLegalMovesNonAlloc(ref moves, quiescence && !isInCheck);
         foreach (Move move in moves)
             killer[1000 + moveNum++] =
-                move.RawValue == entry.move ? -1_000_000_000
+                move == entryMove ? -1_000_000_000
                 : move.IsCapture ? -10_000_000 * (int)move.CapturePieceType + (int)move.MovePieceType
                 : killer[depth] == move.RawValue ? -1_000_000
                 : history[depth % 2, move.TargetSquare.Index, (int)move.MovePieceType]
@@ -162,38 +179,45 @@ public class MyBot : IChessBot
         foreach (var move in moves)
         {
             board.MakeMove(move);
+        
+            score = alpha + 1;
 
             if (moveNum++ == 0 || quiescence)
                 Recurse(beta);
             else
             {
-                int alphaPlus1 = score = alpha + 1;
-                if (moveNum > 5 && depthRemaining > 1)
-                    // short scout LMR
-                    Recurse(alphaPlus1, 3);
+                //
+                // Late move reduction.
+                //
+                if (depthRemaining > 1 &&
+                    moveNum > 5 &&
+                    // Don't sleep on DANGER PAWN!!
+                    (move.MovePieceType != PieceType.Pawn || move.TargetSquare.Rank % 5 != 1)
+                )
+                    Recurse(score, (inNullWindow ? 2 : 1) + moveNum / 13 + depthRemaining / 9);
+
                 if (alpha < score)
-                    // scout
-                    Recurse(alphaPlus1);
-                if (alpha < score && score < beta)
+                    Recurse(alpha + 1);
+                if (alpha < score)
                     Recurse(beta);
             }
             board.UndoMove(move);
+
             if (depthRemaining > 2 && timer.MillisecondsElapsedThisTurn >= timeLimit)
                 return 55555; //TIMEOUT
-            if (score > bestScore)
-                bestScore = score;
-            if (score > alpha)
+
+            if (score > bestScore && (bestScore = score) > alpha)
             {
-                entry.cutoff = 2; //EXACT
+                entryCutoff = 2; //EXACT
                 alpha = score;
-                entry.move = move.RawValue;
-                if (topLevel) bestMove = move;
+                entryMove = move;
+                if (!interior) bestMove = move;
             }
 
             if (alpha >= beta)
             {
-                entry.cutoff = 0; //BETA
-                if (!move.IsCapture && move.PromotionPieceType != PieceType.Queen)
+                entryCutoff = 0; //BETA
+                if (!move.IsCapture)
                 {
                     killer[depth] = move.RawValue;
                     history[depth % 2, move.TargetSquare.Index, (int)move.MovePieceType] -= depthRemaining * depthRemaining;
@@ -204,38 +228,16 @@ public class MyBot : IChessBot
         if (bestScore == -666_666)
             return isInCheck ? depth - 33333 : 0;
 
-        entry.score = bestScore;
-        entry.depth = depthRemaining;
-        entry.zobrist = zobrist;
-        tt[zindex] = entry;
+        tt[zobrist & 0x6fffff] = (zobrist, entryMove, bestScore, depthRemaining, entryCutoff);
 
         return bestScore;
+
     }
 
-    int StaticEvaluation()
-    {
-        int egScore = 0,
-            mgScore = 0,
-            phaseWeight = 0,
-            side = -1;
-
-        while (++side < 2)
-            for (int p = -1; ++p < 6;)
-                for (ulong mask = board.GetPieceBitboard((PieceType)p + 1, side > 0); mask != 0;)
-                {
-                    int index = (BitboardHelper.ClearAndGetIndexOfLSB(ref mask) ^ 0b111000 * side) * 12 + p * 2, colorSign = 2 * side - 1;
-                    phaseWeight += 0x42110 >> p * 4 & 0xf; // tyrant version. fewer tokens than (p + (p & 0b101)) / 2;
-                    mgScore += ppt[index++] * colorSign;
-                    egScore += ppt[index] * colorSign;
-                }
-
-        return (phaseWeight * mgScore + 24 * egScore - egScore * phaseWeight) / (board.IsWhiteToMove ? 24 : -24) + 16;
-    }
-
-    // Read in range-compressed piece position tables and add piece values
-    // (https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function)
+    // Range-compressed piece position tables with piece weights added.
+    // (See https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function)
     static int bi;
-    readonly static int[] ppt = new[] {
+    int[] ppt = new[] {
             64011389261109431815273119744m,
             71819935927675683611806531584m,
             75527711785727240428128370688m,
@@ -301,17 +303,17 @@ public class MyBot : IChessBot
             74296892318191835006387814400m,
             70265058374062339031171072000m
         }
-            .SelectMany(decimal.GetBits)
-            .Where((x, i) => i % 4 != 3)
-            .SelectMany(BitConverter.GetBytes)
-            .Select(b => new[]{
+        .SelectMany(decimal.GetBits)
+        .Where((x, i) => i % 4 != 3)
+        .SelectMany(BitConverter.GetBytes)
+        .Select(b => new[] { // allocate int[12] 768 times to save 3 tokens :-)
                 // piece weights (mg, eg)
                 82,  94,   // pawn
                 337, 281,  // knight
                 365, 297,  // bishop
                 477, 512,  // rook
                 1025, 936, // queen
-                0,   0    // king
+                0,   0     // king
             }[bi++ % 12] + 1475 * (sbyte)b / 1000)
-            .ToArray();
+        .ToArray();
 }
