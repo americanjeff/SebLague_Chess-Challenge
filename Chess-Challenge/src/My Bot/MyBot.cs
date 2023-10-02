@@ -66,8 +66,8 @@ public class MyBot : IChessBot
             //
             if (alpha < score && score < beta)
             {
-                alpha = score - 13;
-                beta = score + 13;
+                alpha = score - 10;
+                beta = score + 10;
                 depthLimit++;
             }
             else
