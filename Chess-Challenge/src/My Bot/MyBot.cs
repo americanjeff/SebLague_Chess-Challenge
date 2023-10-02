@@ -6,7 +6,7 @@ using System.Linq;
 // Chess bot "Thunker Weed" for SebLague Chess Challenge
 //
 // Author: American Jeff
-// 2023-09-30
+// 2023-10-01
 //
 // Thanks to https://github.com/Tyrant7/Chess-Challenge from which many
 // token savings were gleaned.
@@ -48,7 +48,7 @@ public class MyBot : IChessBot
             string moveNumStr = String.Format("{0:N1}", board.PlyCount / 2f + 1);
             if (depthLimit == 2)
                 Console.WriteLine("{0,4} {1,5} {2,7} {3,4}/{4,4} {5,6} {6,6}/s {7,7} {8,8}",
-                    "#", "depth", "score", "used", "rem", "nodes", "nodes", "best", "MyBot");
+                    "#", "depth", "score", "used", "rem", "nodes", "nodes", "best", "Thunker Weed");
             Console.WriteLine(
                 "{0,4} {1,5} {2,7} {3,4}/{4,4} {5,6} {6,6}/s {7,7}",
                 moveNumStr,
@@ -66,8 +66,8 @@ public class MyBot : IChessBot
             //
             if (alpha < score && score < beta)
             {
-                alpha = score - 10;
-                beta = score + 10;
+                alpha = score - 13;
+                beta = score + 13;
                 depthLimit++;
             }
             else
@@ -129,7 +129,6 @@ public class MyBot : IChessBot
                                 BitboardHelper.GetPieceAttacks((PieceType)p + 1, new Square(square), board, side > 0)
                             );
 
-                        //mgScore += terps * (0x112211 >> p * 4 & 0xf) + ppt[index++];
                         mgScore += ppt[index++] + terps;
                         egScore += ppt[index]   + terps * 7;
                     }
